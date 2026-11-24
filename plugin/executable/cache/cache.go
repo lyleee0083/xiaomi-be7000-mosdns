@@ -51,11 +51,13 @@ const (
 )
 
 func init() {
-	coremain.RegNewPluginFunc(PluginType, Init, func() any { return new(Args) })
+	coremain.RegNewPluginFunc(PluginType, Init, func() any { return &Args{Size: defaultCacheSize} })
 	sequence.MustRegExecQuickSetup(PluginType, quickSetupCache)
 }
 
 const (
+	defaultCacheSize         = 1024
+	maxBE7000CacheSize       = 65535
 	defaultLazyUpdateTimeout = time.Second * 5
 	expiredMsgTtl            = 5
 
@@ -75,7 +77,7 @@ type Args struct {
 }
 
 func (a *Args) init() {
-	utils.SetDefaultUnsignNum(&a.Size, 1024)
+	utils.SetDefaultUnsignNum(&a.Size, defaultCacheSize)
 	utils.SetDefaultUnsignNum(&a.DumpInterval, 600)
 }
 
@@ -97,9 +99,16 @@ type Cache struct {
 }
 
 func Init(bp *coremain.BP, args any) (any, error) {
-	c := NewCache(args.(*Args), Opts{
+	cacheArgs := args.(*Args)
+	tag := bp.Tag()
+	if tag == "ordinary_cache" || tag == "node_cache" {
+		if !utils.CheckNumRange(cacheArgs.Size, 1, maxBE7000CacheSize) {
+			return nil, fmt.Errorf("cache %q size must be between 1 and %d, got %d", tag, maxBE7000CacheSize, cacheArgs.Size)
+		}
+	}
+	c := NewCache(cacheArgs, Opts{
 		Logger:     bp.L(),
-		MetricsTag: bp.Tag(),
+		MetricsTag: tag,
 	})
 
 	if err := c.RegMetricsTo(prometheus.WrapRegistererWithPrefix(PluginType+"_", bp.M().GetMetricsReg())); err != nil {
@@ -110,7 +119,7 @@ func Init(bp *coremain.BP, args any) (any, error) {
 }
 
 // QuickSetup format: [size]
-// default is 1024. If size is < 1024, 1024 will be used.
+// The default size is 1024.
 func quickSetupCache(bq sequence.BQ, s string) (any, error) {
 	size := 0
 	if len(s) > 0 {

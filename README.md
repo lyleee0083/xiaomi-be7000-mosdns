@@ -19,6 +19,8 @@
 
 归档包含二进制、说明和许可证。MosDNS 继续读取启动参数指定的配置文件。插件、上游、监听地址和运行目录沿用原有配置方式，详见 [MosDNS Wiki](https://irine-sistiana.gitbook.io/mosdns-wiki/)。
 
+标记为 `ordinary_cache` 和 `node_cache` 的缓存插件支持将 `args.size` 设为 `1` 至 `65535`。该值是缓存记录总数的上限。省略时使用原默认值 `1024`。显式填写越界值会导致配置加载失败。
+
 ## 构建与测试
 
 在仓库根目录使用 Git、Go 1.26 和 Python 3.10 或更新版本。构建产物位于 `release/mosdns-xiaomi-be7000-linux-arm64.zip`。
