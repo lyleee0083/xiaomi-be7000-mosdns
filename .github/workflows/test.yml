@@ -1,14 +1,19 @@
-name: Test mosdns
+name: Test Xiaomi BE7000 MosDNS
 
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -16,8 +21,15 @@ jobs:
           check-latest: true
           cache: true
 
-      - name: Build
-        run: go build -v ./...
-
       - name: Test
         run: go test -race -v ./...
+
+      - name: Build Xiaomi BE7000 archive
+        run: python3 release.py
+
+      - name: Upload Xiaomi BE7000 archive
+        uses: actions/upload-artifact@v7
+        with:
+          path: release/mosdns-xiaomi-be7000-linux-arm64.zip
+          archive: false
+          if-no-files-found: error

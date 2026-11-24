@@ -43,7 +43,6 @@ import (
 	"github.com/miekg/dns"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
-	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -85,7 +84,8 @@ type Cache struct {
 
 	logger       *zap.Logger
 	backend      *cache.Cache[key, *item]
-	lazyUpdateSF singleflight.Group
+	lazyUpdateMu sync.Mutex
+	lazyUpdating map[string]struct{}
 	closeOnce    sync.Once
 	closeNotify  chan struct{}
 	updatedKey   atomic.Uint64
@@ -215,32 +215,43 @@ func (c *Cache) Exec(ctx context.Context, qCtx *query_context.Context, next sequ
 	return err
 }
 
-// doLazyUpdate starts a new goroutine to execute next node and update the cache in the background.
-// It has an inner singleflight.Group to de-duplicate same msgKey.
+// doLazyUpdate starts a background refresh if this key has no refresh in progress.
 func (c *Cache) doLazyUpdate(msgKey string, qCtx *query_context.Context, next sequence.ChainWalker) {
-	qCtxCopy := qCtx.Copy()
-	lazyUpdateFunc := func() (any, error) {
-		defer c.lazyUpdateSF.Forget(msgKey)
-		qCtx := qCtxCopy
+	c.lazyUpdateMu.Lock()
+	if _, updating := c.lazyUpdating[msgKey]; updating {
+		c.lazyUpdateMu.Unlock()
+		return
+	}
+	if c.lazyUpdating == nil {
+		c.lazyUpdating = make(map[string]struct{})
+	}
+	c.lazyUpdating[msgKey] = struct{}{}
+	c.lazyUpdateMu.Unlock()
 
-		c.logger.Debug("start lazy cache update", qCtx.InfoField())
+	qCtxCopy := qCtx.Copy()
+	go func(next sequence.ChainWalker) {
+		defer func() {
+			c.lazyUpdateMu.Lock()
+			delete(c.lazyUpdating, msgKey)
+			c.lazyUpdateMu.Unlock()
+		}()
+
+		c.logger.Debug("start lazy cache update", qCtxCopy.InfoField())
 		ctx, cancel := context.WithTimeout(context.Background(), defaultLazyUpdateTimeout)
 		defer cancel()
 
-		err := next.ExecNext(ctx, qCtx)
+		err := next.ExecNext(ctx, qCtxCopy)
 		if err != nil {
-			c.logger.Warn("failed to update lazy cache", qCtx.InfoField(), zap.Error(err))
+			c.logger.Warn("failed to update lazy cache", qCtxCopy.InfoField(), zap.Error(err))
 		}
 
-		r := qCtx.R()
+		r := qCtxCopy.R()
 		if r != nil {
 			saveRespToCache(msgKey, r, c.backend, c.args.LazyCacheTTL)
 			c.updatedKey.Add(1)
 		}
-		c.logger.Debug("lazy cache updated", qCtx.InfoField())
-		return nil, nil
-	}
-	c.lazyUpdateSF.DoChan(msgKey, lazyUpdateFunc) // DoChan won't block this goroutine
+		c.logger.Debug("lazy cache updated", qCtxCopy.InfoField())
+	}(next)
 }
 
 func (c *Cache) Close() error {

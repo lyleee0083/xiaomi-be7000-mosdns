@@ -21,11 +21,85 @@ package cache
 
 import (
 	"bytes"
-	"github.com/miekg/dns"
+	"context"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
+
+	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
+	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
+	"github.com/miekg/dns"
 )
+
+func TestCacheLazyUpdateCoalescesPendingQueries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := NewCache(&Args{}, Opts{})
+		defer c.Close()
+
+		release := make(chan struct{})
+		qCtx := query_context.NewContext(new(dns.Msg).SetQuestion("example.test.", dns.TypeA))
+		var refreshes atomic.Int32
+		next := sequence.NewChainWalker([]*sequence.ChainNode{{
+			E: sequence.ExecutableFunc(func(_ context.Context, refreshed *query_context.Context) error {
+				if refreshed == qCtx || refreshed.Q() == qCtx.Q() {
+					t.Error("refresh must use a copy of the query")
+				}
+				refreshes.Add(1)
+				<-release
+				return nil
+			}),
+		}}, nil)
+
+		c.doLazyUpdate("first", qCtx, next)
+		synctest.Wait()
+		for range 32 {
+			go c.doLazyUpdate("first", qCtx, next)
+		}
+		c.doLazyUpdate("second", qCtx, next)
+		synctest.Wait()
+		if got := refreshes.Load(); got != 2 {
+			t.Errorf("pending refreshes = %d, want 2", got)
+		}
+
+		close(release)
+		synctest.Wait()
+		c.doLazyUpdate("first", qCtx, next)
+		synctest.Wait()
+		if got := refreshes.Load(); got != 3 {
+			t.Errorf("total refreshes = %d, want 3 after the first refresh completes", got)
+		}
+	})
+}
+
+func BenchmarkCacheLazyUpdatePending(b *testing.B) {
+	c := NewCache(&Args{}, Opts{})
+	defer c.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	qCtx := query_context.NewContext(new(dns.Msg).SetQuestion("example.test.", dns.TypeA))
+	next := sequence.NewChainWalker([]*sequence.ChainNode{{
+		E: sequence.ExecutableFunc(func(context.Context, *query_context.Context) error {
+			close(started)
+			<-release
+			close(finished)
+			return nil
+		}),
+	}}, nil)
+	c.doLazyUpdate("pending", qCtx, next)
+	<-started
+
+	b.ReportAllocs()
+	for b.Loop() {
+		c.doLazyUpdate("pending", qCtx, next)
+	}
+
+	close(release)
+	<-finished
+}
 
 func Test_cachePlugin_Dump(t *testing.T) {
 	c := NewCache(&Args{Size: 16 * dumpBlockSize}, Opts{}) // Big enough to create dump fragments.

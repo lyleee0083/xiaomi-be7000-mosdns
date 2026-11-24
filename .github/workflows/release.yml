@@ -1,15 +1,20 @@
-name: Release mosdns
+name: Release Xiaomi BE7000 MosDNS
 
 on:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -23,15 +28,14 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Build
+      - name: Build Xiaomi BE7000 archive
         run: python ./release.py
-        env:
-          CGO_ENABLED: "0"
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: "./release/mosdns*.zip"
+          files: release/mosdns-xiaomi-be7000-linux-arm64.zip
+          fail_on_unmatched_files: true
           prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
