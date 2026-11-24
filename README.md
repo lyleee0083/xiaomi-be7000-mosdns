@@ -1,6 +1,6 @@
 # 小米 BE7000 MosDNS
 
-基于 [MosDNS v5](https://github.com/IrineSistiana/mosdns) 的 DNS 转发器，适用于小米 BE7000。
+适用于小米 BE7000 的 DNS 转发器，基于 [IrineSistiana/mosdns](https://github.com/IrineSistiana/mosdns) 的 v5 源码，导入基线为 [`9cfb7ce`](https://github.com/IrineSistiana/mosdns/commit/9cfb7ce985599c087cb7ccfb1531d0c0f4021242)。
 
 ## 功能
 
