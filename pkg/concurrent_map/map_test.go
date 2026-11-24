@@ -21,6 +21,7 @@ package concurrent_map
 
 import (
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -29,6 +30,38 @@ type testMapHashable uint64
 
 func (h testMapHashable) Sum() uint64 {
 	return uint64(h)
+}
+
+func TestMapCacheCapacity(t *testing.T) {
+	for _, size := range []int{1, 63, 64, 65, 65535} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			m := NewMapCache[testMapHashable, int](size)
+			for i := range size {
+				m.Set(testMapHashable(i), i)
+			}
+			if got := m.Len(); got != size {
+				t.Fatalf("filled cache has %d entries, want %d", got, size)
+			}
+
+			m.Set(0, -1)
+			if got := m.Len(); got != size {
+				t.Fatalf("cache has %d entries after updating a key, want %d", got, size)
+			}
+
+			for i := size; i < 2*size; i++ {
+				if i%2 == 0 {
+					m.Set(testMapHashable(i), i)
+				} else {
+					m.TestAndSet(testMapHashable(i), func(int, bool) (int, bool, bool) {
+						return i, true, false
+					})
+				}
+			}
+			if got := m.Len(); got != size {
+				t.Fatalf("cache has %d entries after further inserts, want %d", got, size)
+			}
+		})
+	}
 }
 
 func Test_Map(t *testing.T) {

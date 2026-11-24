@@ -23,15 +23,62 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/IrineSistiana/mosdns/v5/coremain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
 	"github.com/miekg/dns"
 )
+
+func TestBE7000CacheConfiguredSize(t *testing.T) {
+	cases := []struct {
+		name string
+		args any
+		want int
+	}{
+		{name: "omitted", want: defaultCacheSize},
+		{name: "minimum", args: map[string]any{"size": 1}, want: 1},
+		{name: "maximum", args: map[string]any{"size": 65535}, want: 65535},
+		{name: "negative", args: map[string]any{"size": -1}},
+		{name: "zero", args: map[string]any{"size": 0}},
+		{name: "over maximum", args: map[string]any{"size": 65536}},
+	}
+	for _, tag := range []string{"ordinary_cache", "node_cache"} {
+		for _, tc := range cases {
+			t.Run(tag+"/"+tc.name, func(t *testing.T) {
+				m, err := coremain.NewMosdns(&coremain.Config{
+					Plugins: []coremain.PluginConfig{{Tag: tag, Type: PluginType, Args: tc.args}},
+				})
+				if m != nil {
+					t.Cleanup(func() {
+						m.CloseWithErr(nil)
+						if err := m.GetSafeClose().WaitClosed(); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+				if tc.want == 0 {
+					if err == nil || !strings.Contains(err.Error(), "size must be between 1 and 65535") {
+						t.Fatalf("expected a size validation error, got %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				cachePlugin := m.GetPlugin(tag).(*Cache)
+				if got := cachePlugin.args.Size; got != tc.want {
+					t.Fatalf("configured size = %d, want %d", got, tc.want)
+				}
+			})
+		}
+	}
+}
 
 func TestCacheLazyUpdateCoalescesPendingQueries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

@@ -65,7 +65,7 @@ type elem[V Value] struct {
 }
 
 // New initializes a Cache.
-// The minimum size is 1024.
+// A size of zero uses the default capacity of 1024.
 // cleanerInterval specifies the interval that Cache scans
 // and discards expired values. If cleanerInterval <= 0, a default
 // interval will be used.

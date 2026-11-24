@@ -35,32 +35,37 @@ type Hashable interface {
 type TestAndSetFunc[K comparable, V any] func(key K, v V, ok bool) (newV V, setV, deleteV bool)
 
 type Map[K Hashable, V any] struct {
-	shards [MapShardSize]shard[K, V]
+	shards []shard[K, V]
 }
 
 func NewMap[K Hashable, V any]() *Map[K, V] {
-	m := new(Map[K, V])
-	for i := range m.shards {
-		m.shards[i] = newShard[K, V](0)
-	}
-	return m
+	return NewMapCache[K, V](0)
 }
 
 // NewMapCache returns a cache with a maximum size.
-// Note that, because this it has multiple (MapShardSize) shards,
-// the actual maximum size is MapShardSize*(size / MapShardSize).
-// If size <=0, it's equal to NewMap().
+// A positive size is the sum of the shard limits. Smaller caches use
+// one shard so that a small capacity can be shared by all keys.
+// A nonpositive size has no limit.
 func NewMapCache[K Hashable, V any](size int) *Map[K, V] {
-	sizePreShard := size / MapShardSize
-	m := new(Map[K, V])
+	shardCount := MapShardSize
+	if size > 0 && size < MapShardSize {
+		shardCount = 1
+	}
+	m := &Map[K, V]{shards: make([]shard[K, V], shardCount)}
+	shardSize, extra := size/shardCount, size%shardCount
 	for i := range m.shards {
-		m.shards[i] = newShard[K, V](sizePreShard)
+		limit := shardSize
+		if i < extra {
+			limit++
+		}
+		m.shards[i] = newShard[K, V](limit)
 	}
 	return m
 }
 
 func (m *Map[K, V]) getShard(key K) *shard[K, V] {
-	return &m.shards[key.Sum()%MapShardSize]
+	// The constructors use either one or MapShardSize (64) shards.
+	return &m.shards[key.Sum()&uint64(len(m.shards)-1)]
 }
 
 func (m *Map[K, V]) Get(key K) (V, bool) {
@@ -125,10 +130,14 @@ func (m *shard[K, V]) get(key K) (V, bool) {
 func (m *shard[K, V]) set(key K, v V) {
 	m.l.Lock()
 	defer m.l.Unlock()
-	if m.max > 0 && len(m.m)+1 > m.max {
-		for k := range m.m {
-			delete(m.m, k)
-			if len(m.m)+1 <= m.max {
+	m.setLocked(key, v)
+}
+
+func (m *shard[K, V]) setLocked(key K, v V) {
+	if m.max > 0 && len(m.m) >= m.max {
+		if _, exists := m.m[key]; !exists {
+			for k := range m.m {
+				delete(m.m, k)
 				break
 			}
 		}
@@ -149,7 +158,7 @@ func (m *shard[K, V]) testAndSet(key K, f func(v V, ok bool) (newV V, setV, delV
 	newV, setV, deleteV := f(v, ok)
 	switch {
 	case setV:
-		m.m[key] = newV
+		m.setLocked(key, newV)
 	case deleteV && ok:
 		delete(m.m, key)
 	}
