@@ -20,7 +20,6 @@
 package cache
 
 import (
-	"github.com/IrineSistiana/mosdns/v5/pkg/concurrent_lru"
 	"github.com/IrineSistiana/mosdns/v5/pkg/concurrent_map"
 	"github.com/IrineSistiana/mosdns/v5/pkg/utils"
 	"sync/atomic"
@@ -32,7 +31,7 @@ const (
 )
 
 type Key interface {
-	concurrent_lru.Hashable
+	concurrent_map.Hashable
 }
 
 type Value interface {
