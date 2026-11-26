@@ -1,8 +1,11 @@
-name: Test Xiaomi BE7000 MosDNS
+name: Build Xiaomi BE7000 MosDNS
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,10 +13,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      asset: ${{ steps.build.outputs.asset }}
+      version: ${{ steps.build.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -26,28 +32,107 @@ jobs:
 
       - uses: ./.github/actions/setup-zig
 
-      - name: Build Xiaomi BE7000 archive
-        id: package
+      - name: Build Xiaomi BE7000 executable
+        id: build
         run: |
-          archive=$(python3 release.py)
-          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
+          binary=$(python3 release.py)
+          version=$(cat VERSION)
+          printf 'binary=%s\nasset=%s\nversion=%s\n' "$binary" "${binary##*/}" "$version" >> "$GITHUB_OUTPUT"
 
-      - name: Check the packaged ARM64 version
+      - name: Verify the ARM64 executable and write its checksum
         env:
-          ARCHIVE: ${{ steps.package.outputs.archive }}
+          BINARY: ${{ steps.build.outputs.binary }}
+          VERSION: ${{ steps.build.outputs.version }}
         run: |
+          header=$(LC_ALL=C readelf -h -- "$BINARY")
+          grep -Eq 'Machine:[[:space:]]+AArch64[[:space:]]*$' <<< "$header"
+          segments=$(LC_ALL=C readelf -lW -- "$BINARY")
+          if grep -Eq '^[[:space:]]+(DYNAMIC|INTERP)[[:space:]]' <<< "$segments"; then
+            echo "Expected a statically linked executable." >&2
+            exit 1
+          fi
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends qemu-user
-          extracted=$(mktemp -d "$RUNNER_TEMP/be7000-mosdns.XXXXXX")
-          unzip -q "$ARCHIVE" mosdns -d "$extracted"
-          actual=$(qemu-aarch64 "$extracted/mosdns" version)
-          expected=$(cat VERSION)
+          actual=$(qemu-aarch64 "$BINARY" version)
           printf 'MosDNS version: %s\n' "$actual"
-          test "$actual" = "$expected"
+          test "$actual" = "$VERSION"
+          cd -- "$(dirname -- "$BINARY")"
+          sha256sum -- "$(basename -- "$BINARY")" > SHA256SUMS.txt
 
-      - name: Upload Xiaomi BE7000 archive
+      - name: Upload Xiaomi BE7000 executable
         uses: actions/upload-artifact@v7
         with:
-          path: ${{ steps.package.outputs.archive }}
+          path: ${{ steps.build.outputs.binary }}
           archive: false
           if-no-files-found: error
+
+      - name: Upload checksum
+        uses: actions/upload-artifact@v7
+        with:
+          path: release/SHA256SUMS.txt
+          archive: false
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-releases
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.asset }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: SHA256SUMS.txt
+
+      - name: Publish verified release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ needs.build.outputs.asset }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="mosdns-xiaomi-be7000-$VERSION"
+          test "$ASSET" = "$tag"
+          test "$(cat SHA256SUMS.txt)" = "$(sha256sum -- "$ASSET")"
+
+          releases=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          existing=$(jq -c --arg tag "$tag" '[.[][] | select(.tag_name == $tag)] | first // empty' <<< "$releases")
+          if [[ -n "$existing" ]]; then
+            jq -e --arg asset "$ASSET" '
+              .draft == false and .prerelease == false and
+              ([.assets[].name] | sort) == ([$asset, "SHA256SUMS.txt"] | sort)
+            ' <<< "$existing" >/dev/null
+            echo "Release $tag is already published."
+            exit 0
+          fi
+
+          ref_error="$RUNNER_TEMP/mosdns-tag-error.txt"
+          if ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>"$ref_error"); then
+            jq -e --arg sha "$GITHUB_SHA" '.object.type == "commit" and .object.sha == $sha' <<< "$ref" >/dev/null
+          elif ! grep -Fq 'HTTP 404' "$ref_error"; then
+            cat "$ref_error" >&2
+            exit 1
+          fi
+
+          previous=$(jq -r '.[][] | select(.draft == false and .prerelease == false) | .tag_name |
+            select(test("^mosdns-xiaomi-be7000-[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("mosdns-xiaomi-be7000-")' <<< "$releases")
+          newest=$(printf '%s\n%s\n' "$VERSION" "$previous" | sort -V | tail -n 1)
+          latest=--latest=false
+          if [[ "$newest" == "$VERSION" ]]; then latest=--latest; fi
+
+          notes="$RUNNER_TEMP/mosdns-release-notes.md"
+          source_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA"
+          printf '%s\n' \
+            "GitHub Actions 已完成 Linux ARM64 musl 构建、Go 测试和 QEMU 版本验证。BE7000 实机运行需另行验收。[构建记录]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)" \
+            "" \
+            "[MosDNS 许可证]($source_url/LICENSE) · [Zig 许可声明]($source_url/LICENSES/zig.txt) · [musl 版权声明]($source_url/LICENSES/musl.txt)" > "$notes"
+          gh release create "$tag" "$ASSET" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Xiaomi BE7000 MosDNS $VERSION" --notes-file "$notes" "$latest"
