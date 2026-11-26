@@ -31,7 +31,7 @@ jobs:
       - name: Test
         run: go test -race -v ./...
 
-      - name: Compare DoH exchange benchmarks
+      - name: Compare DoH and DNS packing benchmarks
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -39,10 +39,12 @@ jobs:
           baseline="$RUNNER_TEMP/mosdns-benchmark-base"
           git worktree add --detach "$baseline" "$BASE_SHA"
           cp pkg/upstream/doh/upstream_test.go "$baseline/pkg/upstream/doh/"
+          cp pkg/pool/msg_buf_test.go "$baseline/pkg/pool/"
+          args=(-run '^$' -bench '^(BenchmarkExchangeContext|BenchmarkPackBuffer)$' -benchmem -count=5 -benchtime=300ms)
           echo "Base $BASE_SHA"
-          (cd "$baseline" && go test -run '^$' -bench '^BenchmarkExchangeContext$' -benchmem -count=5 -benchtime=300ms ./pkg/upstream/doh)
+          (cd "$baseline" && go test "${args[@]}" ./pkg/upstream/doh ./pkg/pool)
           echo "Candidate $GITHUB_SHA"
-          go test -run '^$' -bench '^BenchmarkExchangeContext$' -benchmem -count=5 -benchtime=300ms ./pkg/upstream/doh
+          go test "${args[@]}" ./pkg/upstream/doh ./pkg/pool
 
       - uses: ./.github/actions/setup-zig
 

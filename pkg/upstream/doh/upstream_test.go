@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/pkg/dnsutils"
 	"github.com/IrineSistiana/mosdns/v5/pkg/pool"
+	"github.com/miekg/dns"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -107,15 +109,83 @@ func TestExchangeContextCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestExchangeContextResponseBody(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		size    int
+		known   bool
+		readErr error
+	}{
+		{name: "known", size: 128, known: true},
+		{name: "unknown", size: 2047},
+		{name: "grow", size: 8192},
+		{name: "limit", size: dns.MaxMsgSize + 1, known: true},
+		{name: "short", size: dnsutils.DnsHeaderLen - 1},
+		{name: "read error", readErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire := bytes.Repeat([]byte{0xa8}, tc.size)
+			rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+				length := int64(-1)
+				if tc.known {
+					length = int64(tc.size)
+				}
+				var reader io.Reader = bytes.NewReader(wire)
+				if tc.readErr != nil {
+					reader = iotest.ErrReader(tc.readErr)
+				}
+				return &http.Response{
+					StatusCode:    http.StatusOK,
+					Body:          io.NopCloser(reader),
+					ContentLength: length,
+				}, nil
+			})
+			u, err := NewUpstream("https://dns.example.test/dns-query", rt, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			query := make([]byte, dnsutils.DnsHeaderLen)
+			binary.BigEndian.PutUint16(query, 0x1234)
+			resp, err := u.ExchangeContext(t.Context(), query)
+			if resp != nil {
+				defer pool.ReleaseBuf(resp)
+			}
+			switch {
+			case tc.readErr != nil:
+				if resp != nil || !errors.Is(err, tc.readErr) {
+					t.Fatalf("expected response read error, got %v", err)
+				}
+			case len(wire) < dnsutils.DnsHeaderLen:
+				if resp != nil || !errors.Is(err, dnsutils.ErrPayloadTooSmall) {
+					t.Fatalf("expected short response error, got %v", err)
+				}
+			default:
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(*resp) != min(tc.size, dns.MaxMsgSize) ||
+					binary.BigEndian.Uint16(*resp) != 0x1234 ||
+					!bytes.Equal((*resp)[2:], wire[2:len(*resp)]) {
+					t.Fatal("response bytes changed")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkExchangeContext(b *testing.B) {
 	for _, size := range []int{64, 1232} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			query := make([]byte, size)
 			binary.BigEndian.PutUint16(query, 0x1234)
-			response := make([]byte, 128)
+			response := make([]byte, max(128, size))
 			response[2] = 0x80
 			rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(response))}, nil
+				return &http.Response{
+					StatusCode:    http.StatusOK,
+					Body:          io.NopCloser(bytes.NewReader(response)),
+					ContentLength: int64(len(response)),
+				}, nil
 			})
 			u, err := NewUpstream("https://dns.example.test/dns-query", rt, nil)
 			if err != nil {

@@ -70,10 +70,6 @@ func NewUpstream(endPoint string, rt http.RoundTripper, logger *zap.Logger) (*Up
 	}, nil
 }
 
-var (
-	bufPool4k = pool.NewBytesBufPool(4096)
-)
-
 func (u *Upstream) ExchangeContext(ctx context.Context, q []byte) (*[]byte, error) {
 	if len(q) < dnsutils.DnsHeaderLen {
 		return nil, dnsutils.ErrPayloadTooSmall
@@ -148,16 +144,40 @@ func (u *Upstream) exchange(ctx context.Context, dnsQuery string) (*[]byte, erro
 		return nil, fmt.Errorf("bad http status codes %d", resp.StatusCode)
 	}
 
-	bb := bufPool4k.Get()
-	defer bufPool4k.Release(bb)
-	_, err = bb.ReadFrom(io.LimitReader(resp.Body, dns.MaxMsgSize))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read http body: %w", err)
+	return readResponseBody(resp.Body, resp.ContentLength)
+}
+
+func readResponseBody(body io.Reader, contentLength int64) (*[]byte, error) {
+	size := 2047
+	if contentLength > 0 {
+		// Leave room to observe EOF after an exactly sized body.
+		size = int(min(contentLength, dns.MaxMsgSize-1)) + 1
 	}
-	if bb.Len() < dnsutils.DnsHeaderLen {
+	payload := pool.GetBuf(size)
+	*payload = (*payload)[:min(cap(*payload), dns.MaxMsgSize)]
+
+	used := 0
+	for used < dns.MaxMsgSize {
+		if used == len(*payload) {
+			larger := pool.GetBuf(min(2*used+1, dns.MaxMsgSize))
+			copy(*larger, (*payload)[:used])
+			pool.ReleaseBuf(payload)
+			payload = larger
+		}
+		n, err := body.Read((*payload)[used:])
+		used += n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			pool.ReleaseBuf(payload)
+			return nil, fmt.Errorf("failed to read http body: %w", err)
+		}
+	}
+	if used < dnsutils.DnsHeaderLen {
+		pool.ReleaseBuf(payload)
 		return nil, dnsutils.ErrPayloadTooSmall
 	}
-	payload := pool.GetBuf(bb.Len())
-	copy(*payload, bb.Bytes())
+	*payload = (*payload)[:used]
 	return payload, nil
 }
