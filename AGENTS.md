@@ -17,8 +17,8 @@
 ## Build and Verification
 
 - The release target is a statically linked Linux ARM64 musl executable for the Xiaomi BE7000 with an ARMv8.0 baseline. See [README.md](README.md) for upstream provenance and the imported revision.
-- Verify locally with Go 1.26 and `go test ./...`. Use the test workflow's race check for concurrent behavior changes. Build with the official Zig toolchain and `python release.py`, then verify the archive and its ELF target.
-- [VERSION](VERSION) supplies the embedded binary version and archive name. The test workflow verifies the packaged ARM64 executable under QEMU before upload. The release workflow requires a matching `v` tag. Keep tags, releases, and router operations within task authorization. Report local tests, Actions results, and hardware acceptance separately.
+- Verify locally with Go 1.26 and `go test ./...`. Use the workflow's race check for concurrent behavior changes. Build with the official Zig toolchain and `python release.py`, then verify the executable and its ELF target.
+- [VERSION](VERSION) supplies the embedded binary version, executable name, and matching release tag. The workflow verifies the ARM64 executable under QEMU and publishes a new version from the default branch with `SHA256SUMS.txt`. Keep tags, releases, and router operations within task authorization. Report local tests, Actions results, and hardware acceptance separately.
 
 ## Versioned deliverables
 
