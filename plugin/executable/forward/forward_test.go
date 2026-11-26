@@ -1,17 +1,20 @@
 package fastforward
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/miekg/dns"
 )
 
 func TestForwardDoH(t *testing.T) {
+	served := make(chan struct{}, 4)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wire, err := base64.RawURLEncoding.DecodeString(r.URL.Query().Get("dns"))
 		query := new(dns.Msg)
@@ -27,6 +30,7 @@ func TestForwardDoH(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/dns-message")
 		_, _ = w.Write(resp)
+		served <- struct{}{}
 	}))
 	server.EnableHTTP2 = true
 	server.StartTLS()
@@ -49,13 +53,22 @@ func TestForwardDoH(t *testing.T) {
 			query := new(dns.Msg).SetQuestion("example.test.", dns.TypeA)
 			query.Id = 0x1234
 			qCtx := query_context.NewContext(query)
-			if err := f.Exec(t.Context(), qCtx); err != nil {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if err := f.Exec(ctx, qCtx); err != nil {
 				t.Fatal(err)
 			}
 			resp := qCtx.R()
 			if resp == nil || !resp.Response || resp.Id != query.Id ||
 				len(resp.Question) != 1 || resp.Question[0] != query.Question[0] {
 				t.Fatalf("unexpected forwarded response: %v", resp)
+			}
+			for i := 0; i < concurrent; i++ {
+				select {
+				case <-served:
+				case <-ctx.Done():
+					t.Fatalf("only %d of %d DoH requests reached the upstream", i, concurrent)
+				}
 			}
 		})
 	}

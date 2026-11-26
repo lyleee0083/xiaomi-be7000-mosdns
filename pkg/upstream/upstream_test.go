@@ -39,11 +39,19 @@ func newUDPTestServer(t testing.TB, handler dns.Handler) (addr string, shutdownF
 		t.Fatal(err)
 	}
 	udpAddr := udpConn.LocalAddr().String()
+	started := make(chan struct{})
+	serveErr := make(chan error, 1)
 	udpServer := dns.Server{
-		PacketConn: udpConn,
-		Handler:    handler,
+		PacketConn:        udpConn,
+		Handler:           handler,
+		NotifyStartedFunc: func() { close(started) },
 	}
-	go udpServer.ActivateAndServe()
+	go func() { serveErr <- udpServer.ActivateAndServe() }()
+	select {
+	case <-started:
+	case err := <-serveErr:
+		t.Fatalf("UDP test server failed to start: %v", err)
+	}
 	return udpAddr, func() {
 		udpServer.Shutdown()
 	}
@@ -180,7 +188,9 @@ func testUpstream(u Upstream) error {
 				logErr(err)
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			// The UDP transport retries after one second. Leave time for
+			// that retry before declaring this functional test a failure.
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			r, err := u.ExchangeContext(ctx, queryPayload)
 			if err != nil {
