@@ -1,4 +1,5 @@
 import argparse
+import errno
 import ipaddress
 import json
 from pathlib import Path
@@ -33,9 +34,26 @@ def dns_query(server, name, request_id, deadline, tcp=False):
             if time.monotonic() >= deadline:
                 raise
     response_id, flags, questions, answers, _, _ = struct.unpack_from("!6H", reply)
-    assert response_id == request_id and flags & 0x8000 and questions == 1
-    assert reply[12:12 + len(question)] == question
+    details = (name, "tcp" if tcp else "udp", request_id, response_id, hex(flags), questions, reply.hex())
+    assert response_id == request_id and flags & 0x8000 and questions == 1, details
+    assert reply[12:12 + len(question)] == question, details
     return flags & 15, answers, reply
+
+
+def find_listener_port():
+    for _ in range(10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
+            tcp.bind(("127.0.0.1", 0))
+            address = tcp.getsockname()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                try:
+                    udp.bind(address)
+                except OSError as error:
+                    if error.errno != errno.EADDRINUSE:
+                        raise
+                    continue
+                return address[1]
+    raise RuntimeError("could not find a port for both TCP and UDP")
 
 
 def assert_rejected(command, directory, config, error_text):
@@ -64,9 +82,7 @@ def main():
                  str(examples / f"{name}.json")],
                 cwd=directory, timeout=15, check=True,
             )
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
+        port = find_listener_port()
 
         config = json.loads((examples / "config.json").read_text(encoding="utf-8"))
         config["plugins"][-1]["args"]["listen"] = f"127.0.0.1:{port}"
@@ -85,7 +101,7 @@ def main():
                         ("sub.blocked.example.test", 5),
                         ("ip.example.test", 5),
                         ("allowed.example.test", 0),
-                    ], start=1):
+                    ], start=4 if tcp else 1):
                         actual, count, reply = dns_query(
                             ("127.0.0.1", port), name, request_id, time.monotonic() + 5, tcp=tcp,
                         )

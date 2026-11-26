@@ -12,7 +12,10 @@ import (
 func TestPackBufferWire(t *testing.T) {
 	query := new(dns.Msg).SetQuestion("example.test.", dns.TypeA)
 	query.Id = 0x1234
+	secondQuery := new(dns.Msg).SetQuestion("example.test.", dns.TypeAAAA)
+	secondQuery.Id = 0x4321
 	reply := new(dns.Msg).SetReply(query)
+	reply.Id = 0xabcd
 	reply.Compress = true
 	for range 80 {
 		reply.Answer = append(reply.Answer, &dns.TXT{
@@ -21,7 +24,7 @@ func TestPackBufferWire(t *testing.T) {
 		})
 	}
 
-	for _, msg := range []*dns.Msg{query, reply} {
+	for _, msg := range []*dns.Msg{query, secondQuery, reply, query} {
 		want, err := msg.Pack()
 		if err != nil {
 			t.Fatal(err)
