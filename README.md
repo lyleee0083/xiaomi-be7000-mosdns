@@ -7,15 +7,16 @@
 - 为 `qualcommax/ipq95xx` 固件构建 Linux ARM64 可执行文件，使用 ARMv8.0 指令基线并静态链接 musl。
 - 启用延迟缓存时，同一缓存键已有后台刷新任务的请求会直接跳过重复刷新和查询上下文复制。
 - 主配置采用 JSON。使用内置命令编译域名和 IP 规则，运行时直接加载 MosDNS 二进制规则集。
+- 单上游转发直接使用已打包的 DNS 查询。DoH 在生成 GET 参数时清零 DNS ID，并在返回响应时恢复原 ID。
 
 ## 快速开始
 
-从 [GitHub Releases](https://github.com/lyleee0083/xiaomi-be7000-mosdns/releases) 下载 `mosdns-xiaomi-be7000-0.0.2` 和 `SHA256SUMS.txt`。在目标 Linux ARM64 环境校验文件、添加执行权限并查看版本。
+从 [GitHub Releases](https://github.com/lyleee0083/xiaomi-be7000-mosdns/releases) 下载对应版本的可执行文件和 `SHA256SUMS.txt`。以下以 `0.0.3` 为例，在目标 Linux ARM64 环境校验文件、添加执行权限并查看版本。
 
 ```sh
 sha256sum -c SHA256SUMS.txt
-chmod +x mosdns-xiaomi-be7000-0.0.2
-./mosdns-xiaomi-be7000-0.0.2 version
+chmod +x mosdns-xiaomi-be7000-0.0.3
+./mosdns-xiaomi-be7000-0.0.3 version
 ```
 
 ## 配置
@@ -27,9 +28,9 @@ chmod +x mosdns-xiaomi-be7000-0.0.2
 在包含 [examples](examples) 目录的位置运行以下命令，可以启动仅监听本机的示例。示例使用保留域名与地址展示域名和响应 IP 匹配。
 
 ```sh
-./mosdns-xiaomi-be7000-0.0.2 rule-set compile examples/domains.json
-./mosdns-xiaomi-be7000-0.0.2 rule-set compile examples/ips.json
-./mosdns-xiaomi-be7000-0.0.2 start -c examples/config.json
+./mosdns-xiaomi-be7000-0.0.3 rule-set compile examples/domains.json
+./mosdns-xiaomi-be7000-0.0.3 rule-set compile examples/ips.json
+./mosdns-xiaomi-be7000-0.0.3 start -c examples/config.json
 ```
 
 使用 `-o` 可以指定二进制规则的输出路径。配置内引用的相对路径以 MosDNS 工作目录为基准。
@@ -47,7 +48,7 @@ python release.py
 
 ## 发布
 
-GitHub Actions 验证主分支的构建、静态链接、程序版本和二进制规则加载后，为 [VERSION](VERSION) 中的新版本发布可执行文件和 `SHA256SUMS.txt`。发布标签与可执行文件同名，例如 `mosdns-xiaomi-be7000-0.0.2`。
+GitHub Actions 验证主分支的构建、静态链接、程序版本和二进制规则加载后，为 [VERSION](VERSION) 中的新版本发布可执行文件和 `SHA256SUMS.txt`。发布标签与可执行文件同名，例如 `mosdns-xiaomi-be7000-0.0.3`。
 
 ## 许可证
 

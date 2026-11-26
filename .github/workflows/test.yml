@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          fetch-depth: 2
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -29,6 +30,19 @@ jobs:
 
       - name: Test
         run: go test -race -v ./...
+
+      - name: Compare DoH exchange benchmarks
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          baseline="$RUNNER_TEMP/mosdns-benchmark-base"
+          git worktree add --detach "$baseline" "$BASE_SHA"
+          cp pkg/upstream/doh/upstream_test.go "$baseline/pkg/upstream/doh/"
+          echo "Base $BASE_SHA"
+          (cd "$baseline" && go test -run '^$' -bench '^BenchmarkExchangeContext$' -benchmem -count=5 -benchtime=300ms ./pkg/upstream/doh)
+          echo "Candidate $GITHUB_SHA"
+          go test -run '^$' -bench '^BenchmarkExchangeContext$' -benchmem -count=5 -benchtime=300ms ./pkg/upstream/doh
 
       - uses: ./.github/actions/setup-zig
 
