@@ -1,0 +1,14 @@
+name: Set up Zig for the BE7000 build
+description: Install the checksum-verified Zig cross-compiler on the Linux x64 runner.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        zig_dir=$(mktemp -d "$RUNNER_TEMP/be7000-zig.XXXXXX")
+        archive="$zig_dir/zig.tar.xz"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$archive" 'https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz'
+        printf '%s  %s\n' '02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239' "$archive" | sha256sum --check -
+        tar -xJf "$archive" -C "$zig_dir" --strip-components=1
+        printf '%s\n' "$zig_dir" >> "$GITHUB_PATH"

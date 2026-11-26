@@ -28,13 +28,20 @@ jobs:
         with:
           python-version: "3.13"
 
+      - uses: ./.github/actions/setup-zig
+
       - name: Build Xiaomi BE7000 archive
-        run: python ./release.py
+        id: package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          archive=$(python ./release.py --tag "$RELEASE_TAG")
+          printf 'archive=%s\n' "$archive" >> "$GITHUB_OUTPUT"
 
       - name: Publish
         uses: softprops/action-gh-release@v2
         with:
-          files: release/mosdns-xiaomi-be7000-linux-arm64.zip
+          files: ${{ steps.package.outputs.archive }}
           fail_on_unmatched_files: true
           prerelease: true
         env:
