@@ -20,14 +20,14 @@
 package ip_set
 
 import (
-	"bytes"
 	"fmt"
-	"github.com/IrineSistiana/mosdns/v5/coremain"
-	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
-	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
 	"net/netip"
 	"os"
-	"strings"
+
+	"github.com/IrineSistiana/mosdns/v5/coremain"
+	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
+	"github.com/IrineSistiana/mosdns/v5/pkg/ruleset"
+	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
 )
 
 const PluginType = "ip_set"
@@ -77,17 +77,6 @@ func NewIPSet(bp *coremain.BP, args *Args) (*IPSet, error) {
 	return p, nil
 }
 
-func parseNetipPrefix(s string) (netip.Prefix, error) {
-	if strings.ContainsRune(s, '/') {
-		return netip.ParsePrefix(s)
-	}
-	addr, err := netip.ParseAddr(s)
-	if err != nil {
-		return netip.Prefix{}, err
-	}
-	return addr.Prefix(addr.BitLen())
-}
-
 func LoadFromIPsAndFiles(ips []string, fs []string, l *netlist.List) error {
 	if err := LoadFromIPs(ips, l); err != nil {
 		return err
@@ -100,7 +89,7 @@ func LoadFromIPsAndFiles(ips []string, fs []string, l *netlist.List) error {
 
 func LoadFromIPs(ips []string, l *netlist.List) error {
 	for i, s := range ips {
-		p, err := parseNetipPrefix(s)
+		p, err := netlist.ParsePrefix(s)
 		if err != nil {
 			return fmt.Errorf("invalid ip #%d %s, %w", i, s, err)
 		}
@@ -124,9 +113,7 @@ func LoadFromFile(f string, l *netlist.List) error {
 		if err != nil {
 			return err
 		}
-		if err := netlist.LoadFromReader(l, bytes.NewReader(b)); err != nil {
-			return err
-		}
+		return ruleset.LoadIP(b, l)
 	}
 	return nil
 }

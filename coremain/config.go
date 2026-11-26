@@ -24,27 +24,27 @@ import (
 )
 
 type Config struct {
-	Log     mlog.LogConfig `yaml:"log"`
-	Include []string       `yaml:"include"`
-	Plugins []PluginConfig `yaml:"plugins"`
-	API     APIConfig      `yaml:"api"`
+	Log     mlog.LogConfig `json:"log"`
+	Include []string       `json:"include"`
+	Plugins []PluginConfig `json:"plugins"`
+	API     APIConfig      `json:"api"`
 }
 
 // PluginConfig represents a plugin config
 type PluginConfig struct {
 	// Tag for this plugin. Optional. If omitted, this plugin will
 	// be registered with a random tag.
-	Tag string `yaml:"tag"`
+	Tag string `json:"tag"`
 
 	// Type, required.
-	Type string `yaml:"type"`
+	Type string `json:"type"`
 
 	// Args, might be required by some plugins.
 	// The type of Args is depended on RegNewPluginFunc.
 	// If it's a map[string]any, it will be converted by mapstruct.
-	Args any `yaml:"args"`
+	Args any `json:"args"`
 }
 
 type APIConfig struct {
-	HTTP string `yaml:"http"`
+	HTTP string `json:"http"`
 }

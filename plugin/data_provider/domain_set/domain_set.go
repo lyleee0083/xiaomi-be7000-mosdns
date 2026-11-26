@@ -20,12 +20,13 @@
 package domain_set
 
 import (
-	"bytes"
 	"fmt"
+	"os"
+
 	"github.com/IrineSistiana/mosdns/v5/coremain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
+	"github.com/IrineSistiana/mosdns/v5/pkg/ruleset"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
-	"os"
 )
 
 const PluginType = "domain_set"
@@ -116,9 +117,7 @@ func LoadFile(f string, m *domain.MixMatcher[struct{}]) error {
 			return err
 		}
 
-		if err := domain.LoadFromTextReader[struct{}](m, bytes.NewReader(b), nil); err != nil {
-			return err
-		}
+		return ruleset.LoadDomain(b, m)
 	}
 	return nil
 }

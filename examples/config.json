@@ -1,0 +1,28 @@
+{
+  "plugins": [
+    {
+      "tag": "blocked_domains",
+      "type": "domain_set",
+      "args": {"files": ["examples/domains.mdrs"]}
+    },
+    {
+      "tag": "blocked_ips",
+      "type": "ip_set",
+      "args": {"files": ["examples/ips.mdrs"]}
+    },
+    {
+      "tag": "demo",
+      "type": "sequence",
+      "args": [
+        {"matches": "qname $blocked_domains", "exec": "reject 5"},
+        {"matches": "qname full:ip.example.test", "exec": "black_hole 192.0.2.10"},
+        {"matches": "resp_ip $blocked_ips", "exec": "reject 5"},
+        {"exec": "black_hole 198.51.100.10"}
+      ]
+    },
+    {
+      "type": "udp_server",
+      "args": {"entry": "demo", "listen": "127.0.0.1:15353"}
+    }
+  ]
+}

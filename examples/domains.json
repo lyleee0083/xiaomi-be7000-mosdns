@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "type": "domain",
+  "rules": [
+    "domain:blocked.example.test",
+    "full:exact.example.test",
+    "keyword:deny-token",
+    "regexp:^rx[0-9]+\\.example\\.test$"
+  ]
+}
