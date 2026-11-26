@@ -28,14 +28,14 @@ import (
 
 type LogConfig struct {
 	// Level, See also zapcore.ParseLevel.
-	Level string `yaml:"level"`
+	Level string `json:"level"`
 
 	// File that logger will be writen into.
 	// Default is stderr.
-	File string `yaml:"file"`
+	File string `json:"file"`
 
 	// Production enables json output.
-	Production bool `yaml:"production"`
+	Production bool `json:"production"`
 }
 
 var (

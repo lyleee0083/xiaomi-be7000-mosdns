@@ -55,23 +55,23 @@ func LoadFromReader(l *List, reader io.Reader) error {
 // LoadFromText loads an IP from s.
 // It might modify the List and causes List unsorted.
 func LoadFromText(l *List, s string) error {
+	prefix, err := ParsePrefix(s)
+	if err != nil {
+		return err
+	}
+	l.Append(prefix)
+	return nil
+}
+
+// ParsePrefix parses a CIDR or an individual IP address.
+func ParsePrefix(s string) (netip.Prefix, error) {
 	if strings.ContainsRune(s, '/') {
-		ipNet, err := netip.ParsePrefix(s)
-		if err != nil {
-			return err
-		}
-		l.Append(ipNet)
-		return nil
+		return netip.ParsePrefix(s)
 	}
 
 	addr, err := netip.ParseAddr(s)
 	if err != nil {
-		return err
+		return netip.Prefix{}, err
 	}
-	bits := 32
-	if addr.Is6() {
-		bits = 128
-	}
-	l.Append(netip.PrefixFrom(addr, bits))
-	return nil
+	return addr.Prefix(addr.BitLen())
 }

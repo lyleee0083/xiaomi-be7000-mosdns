@@ -20,90 +20,51 @@
 package tools
 
 import (
-	"github.com/IrineSistiana/mosdns/v5/mlog"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
-func newConvCmd() *cobra.Command {
-	var (
-		in  string
-		out string
-	)
-
-	c := &cobra.Command{
-		Use:   "conv -i input_cfg -o output_cfg",
-		Args:  cobra.NoArgs,
-		Short: "Convert configuration file format. Supported extensions: " + strings.Join(viper.SupportedExts, ", "),
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := convCfg(in, out); err != nil {
-				mlog.S().Fatal(err)
-			}
-		},
-		DisableFlagsInUseLine: true,
-	}
-	c.Flags().StringVarP(&in, "in", "i", "", "input config")
-	c.Flags().StringVarP(&out, "out", "o", "", "output config")
-	c.MarkFlagRequired("in")
-	c.MarkFlagRequired("out")
-	c.MarkFlagFilename("in")
-	c.MarkFlagFilename("out")
-	return c
-}
-
 func newGenCmd() *cobra.Command {
-	c := &cobra.Command{
-		Use:   "gen config_file",
-		Short: "Generate a template config. Supported extensions: " + strings.Join(viper.SupportedExts, ", "),
+	return &cobra.Command{
+		Use:   "gen config.json",
+		Short: "Generate a template JSON configuration.",
 		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			if err := genCfg(args[0]); err != nil {
-				mlog.S().Fatal(err)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !strings.EqualFold(filepath.Ext(args[0]), ".json") {
+				return fmt.Errorf("configuration must be a .json file")
 			}
+			return os.WriteFile(args[0], []byte(configTemplate), 0o644)
 		},
 		DisableFlagsInUseLine: true,
 	}
-	return c
 }
 
-func convCfg(in, out string) error {
-	v := viper.New()
-	v.SetConfigFile(in)
-	if err := v.ReadInConfig(); err != nil {
-		return err
-	}
-	return v.SafeWriteConfigAs(out)
+const configTemplate = `{
+  "log": {
+    "level": "info"
+  },
+  "plugins": [
+    {
+      "tag": "forward_google",
+      "type": "forward",
+      "args": {
+        "upstreams": [{"addr": "https://8.8.8.8/dns-query"}]
+      }
+    },
+    {
+      "tag": "udp_server",
+      "type": "udp_server",
+      "args": {"entry": "forward_google", "listen": "127.0.0.1:53"}
+    },
+    {
+      "tag": "tcp_server",
+      "type": "tcp_server",
+      "args": {"entry": "forward_google", "listen": "127.0.0.1:53"}
+    }
+  ]
 }
-
-func genCfg(out string) error {
-	cfg := `
-log:
-  level: info
-
-plugins:
-  - tag: forward_google
-    type: forward
-    args:
-      upstreams:
-        - addr: https://8.8.8.8/dns-query
-
-  - tag: udp_server
-    type: udp_server
-    args:
-      entry: forward_google
-      listen: "127.0.0.1:53"
-  - tag: tcp_server
-    type: tcp_server
-    args:
-      entry: forward_google
-      listen: "127.0.0.1:53"
 `
-	v := viper.New()
-	v.SetConfigType("yaml")
-	if err := v.ReadConfig(strings.NewReader(cfg)); err != nil {
-		return err
-	}
-
-	return v.WriteConfigAs(out)
-}

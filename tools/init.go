@@ -38,8 +38,9 @@ func init() {
 
 	configCmd := &cobra.Command{
 		Use:   "config",
-		Short: "Tools that can generate/convert mosdns config file.",
+		Short: "Generate MosDNS JSON configuration.",
 	}
-	configCmd.AddCommand(newGenCmd(), newConvCmd())
+	configCmd.AddCommand(newGenCmd())
 	coremain.AddSubCmd(configCmd)
+	coremain.AddSubCmd(newRuleSetCmd())
 }

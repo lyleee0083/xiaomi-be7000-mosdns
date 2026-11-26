@@ -20,17 +20,20 @@
 package coremain
 
 import (
+	"encoding/json"
 	"fmt"
-	"github.com/IrineSistiana/mosdns/v5/mlog"
-	"github.com/kardianos/service"
-	"github.com/go-viper/mapstructure/v2"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"go.uber.org/zap"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
+
+	"github.com/IrineSistiana/mosdns/v5/mlog"
+	"github.com/kardianos/service"
+	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 type serverFlags struct {
@@ -47,7 +50,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	sf := new(serverFlags)
 	startCmd := &cobra.Command{
-		Use:   "start [-c config_file] [-d working_dir]",
+		Use:   "start [-c config.json] [-d working_dir]",
 		Short: "Start mosdns main program.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if sf.asService {
@@ -77,7 +80,7 @@ func init() {
 	}
 	rootCmd.AddCommand(startCmd)
 	fs := startCmd.Flags()
-	fs.StringVarP(&sf.c, "config", "c", "", "config file")
+	fs.StringVarP(&sf.c, "config", "c", "", "JSON config file (default config.json)")
 	fs.StringVarP(&sf.dir, "dir", "d", "", "working dir")
 	fs.IntVar(&sf.cpu, "cpu", 0, "set runtime.GOMAXPROCS")
 	fs.BoolVar(&sf.asService, "as-service", false, "start as a service")
@@ -129,31 +132,33 @@ func NewServer(sf *serverFlags) (*Mosdns, error) {
 	return NewMosdns(cfg)
 }
 
-// loadConfig load a config from a file. If filePath is empty, it will
-// automatically search and load a file which name start with "config".
+// loadConfig reads a JSON configuration. The default path is config.json.
 func loadConfig(filePath string) (*Config, string, error) {
-	v := viper.New()
-
-	if len(filePath) > 0 {
-		v.SetConfigFile(filePath)
-	} else {
-		v.SetConfigName("config")
-		v.AddConfigPath(".")
+	if filePath == "" {
+		filePath = "config.json"
 	}
-
-	if err := v.ReadInConfig(); err != nil {
-		return nil, "", fmt.Errorf("failed to read config: %w", err)
+	if !strings.EqualFold(filepath.Ext(filePath), ".json") {
+		return nil, "", fmt.Errorf("configuration must be a .json file: %s", filePath)
 	}
-
-	decoderOpt := func(cfg *mapstructure.DecoderConfig) {
-		cfg.ErrorUnused = true
-		cfg.TagName = "yaml"
-		cfg.WeaklyTypedInput = true
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, "", err
 	}
+	defer file.Close()
 
-	cfg := new(Config)
-	if err := v.Unmarshal(cfg, decoderOpt); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal config: %w", err)
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
+	var cfg *Config
+	if err := decoder.Decode(&cfg); err != nil {
+		return nil, "", fmt.Errorf("invalid JSON configuration: %w", err)
 	}
-	return cfg, v.ConfigFileUsed(), nil
+	if cfg == nil {
+		return nil, "", fmt.Errorf("configuration must be a JSON object")
+	}
+	var extra json.RawMessage
+	if decoder.Decode(&extra) != io.EOF {
+		return nil, "", fmt.Errorf("unexpected data after JSON configuration")
+	}
+	return cfg, filePath, nil
 }
