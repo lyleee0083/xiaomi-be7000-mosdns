@@ -26,44 +26,48 @@ import (
 	"github.com/miekg/dns"
 )
 
-// There is no such way to give dns.Msg.PackBuffer() a buffer
-// with a proper size.
-// Just give it a big buf and hope the buf will be reused in most scenes.
-const packBufferSize = 8191
-
-// PackBuffer packs the dns msg m to wire format.
-// Callers should release the buf by calling ReleaseBuf after they have done
-// with the wire []byte.
+// PackBuffer packs a DNS message into a buffer that the caller must release with ReleaseBuf.
 func PackBuffer(m *dns.Msg) (*[]byte, error) {
-	packBuf := GetBuf(packBufferSize)
-	defer ReleaseBuf(packBuf)
-	wire, err := m.PackBuffer(*packBuf)
-	if err != nil {
-		return nil, err
-	}
-
-	msgBuf := GetBuf(len(wire))
-	copy(*msgBuf, wire)
-	return msgBuf, nil
+	return packBuffer(m, 0)
 }
 
-// PackBuffer packs the dns msg m to wire format, with to bytes length header.
-// Callers should release the buf by calling ReleaseBuf.
+// PackTCPBuffer packs a DNS message with its two-byte TCP length prefix.
+// The caller must release the returned buffer with ReleaseBuf.
 func PackTCPBuffer(m *dns.Msg) (*[]byte, error) {
-	packBuf := GetBuf(packBufferSize)
-	defer ReleaseBuf(packBuf)
-	wire, err := m.PackBuffer((*packBuf)[2:])
+	return packBuffer(m, 2)
+}
+
+func packBuffer(m *dns.Msg, prefix int) (*[]byte, error) {
+	// miekg/dns v1.1.72 needs the uncompressed length plus a spare byte
+	// even for compressed messages. Size a shallow copy without changing m.
+	uncompressed := *m
+	uncompressed.Compress = false
+	buf := GetBuf(prefix + uncompressed.Len() + 1)
+	dst := (*buf)[prefix:cap(*buf)]
+	wire, err := m.PackBuffer(dst)
 	if err != nil {
+		ReleaseBuf(buf)
 		return nil, err
 	}
 
-	l := len(wire)
-	if l > dns.MaxMsgSize {
-		return nil, fmt.Errorf("dns payload size %d is too large", l)
+	if prefix != 0 && len(wire) > dns.MaxMsgSize {
+		ReleaseBuf(buf)
+		return nil, fmt.Errorf("dns payload size %d is too large", len(wire))
 	}
 
-	msgBuf := GetBuf(2 + len(wire))
-	binary.BigEndian.PutUint16(*msgBuf, uint16(l))
-	copy((*msgBuf)[2:], wire)
-	return msgBuf, nil
+	size := prefix + len(wire)
+	if &wire[0] == &dst[0] {
+		*buf = (*buf)[:size]
+	} else {
+		// PackBuffer may allocate its own slice. Keep the pool's capacity
+		// invariant by copying only in that case.
+		ReleaseBuf(buf)
+		buf = GetBuf(size)
+		copy((*buf)[prefix:], wire)
+	}
+
+	if prefix != 0 {
+		binary.BigEndian.PutUint16(*buf, uint16(len(wire)))
+	}
+	return buf, nil
 }

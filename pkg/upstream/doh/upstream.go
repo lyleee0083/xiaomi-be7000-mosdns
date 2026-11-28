@@ -70,40 +70,27 @@ func NewUpstream(endPoint string, rt http.RoundTripper, logger *zap.Logger) (*Up
 	}, nil
 }
 
-var (
-	bufPool4k = pool.NewBytesBufPool(4096)
-)
-
 func (u *Upstream) ExchangeContext(ctx context.Context, q []byte) (*[]byte, error) {
-	bp := pool.GetBuf(len(q))
-	defer pool.ReleaseBuf(bp)
-	wire := *bp
-	copy(wire, q)
+	if len(q) < dnsutils.DnsHeaderLen {
+		return nil, dnsutils.ErrPayloadTooSmall
+	}
 
-	// In order to maximize HTTP cache friendliness, DoH clients using media
-	// formats that include the ID field from the DNS message header, such
-	// as "application/dns-message", SHOULD use a DNS ID of 0 in every DNS
-	// request.
-	// https://tools.ietf.org/html/rfc8484#section-4.1
-	wire[0] = 0
-	wire[1] = 0
-
-	queryLen := 4 + base64.RawURLEncoding.EncodedLen(len(wire))
-	queryBuf := make([]byte, queryLen)
-
-	p := 0
-	p += copy(queryBuf, "dns=")
-
-	// Padding characters for base64url MUST NOT be included.
-	// See: https://tools.ietf.org/html/rfc8484#section-6.
-	base64.RawURLEncoding.Encode(queryBuf[p:], wire)
+	const queryPrefix = "dns="
+	queryBuf := make([]byte, len(queryPrefix)+base64.RawURLEncoding.EncodedLen(len(q)))
+	copy(queryBuf, queryPrefix)
+	encoded := queryBuf[len(queryPrefix):]
+	base64.RawURLEncoding.Encode(encoded, q)
+	// RFC 8484 recommends a zero DNS ID. The ID occupies the first
+	// two base64 digits and the high four bits of the third digit.
+	encoded[0], encoded[1], encoded[2] = 'A', 'A', "ABCD"[q[2]>>6]
+	callerDone := ctx.Done()
 
 	type res struct {
 		r   *[]byte
 		err error
 	}
 
-	resChan := make(chan res, 1)
+	resChan := make(chan res)
 	go func() {
 		// We overwrite the ctx with a fixed timeout context here.
 		// Because the http package may close the underlay connection
@@ -115,11 +102,17 @@ func (u *Upstream) ExchangeContext(ctx context.Context, q []byte) (*[]byte, erro
 		if err != nil {
 			u.logger.Check(zap.WarnLevel, "exchange failed").Write(zap.Error(err))
 		}
-		resChan <- res{r: r, err: err}
+		select {
+		case resChan <- res{r: r, err: err}:
+		case <-callerDone:
+			if r != nil {
+				pool.ReleaseBuf(r)
+			}
+		}
 	}()
 
 	select {
-	case <-ctx.Done():
+	case <-callerDone:
 		return nil, context.Cause(ctx)
 	case res := <-resChan:
 		r := res.r
@@ -151,16 +144,40 @@ func (u *Upstream) exchange(ctx context.Context, dnsQuery string) (*[]byte, erro
 		return nil, fmt.Errorf("bad http status codes %d", resp.StatusCode)
 	}
 
-	bb := bufPool4k.Get()
-	defer bufPool4k.Release(bb)
-	_, err = bb.ReadFrom(io.LimitReader(resp.Body, dns.MaxMsgSize))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read http body: %w", err)
+	return readResponseBody(resp.Body, resp.ContentLength)
+}
+
+func readResponseBody(body io.Reader, contentLength int64) (*[]byte, error) {
+	size := 2047
+	if contentLength > 0 {
+		// Leave room to observe EOF after an exactly sized body.
+		size = int(min(contentLength, dns.MaxMsgSize-1)) + 1
 	}
-	if bb.Len() < dnsutils.DnsHeaderLen {
+	payload := pool.GetBuf(size)
+	*payload = (*payload)[:min(cap(*payload), dns.MaxMsgSize)]
+
+	used := 0
+	for used < dns.MaxMsgSize {
+		if used == len(*payload) {
+			larger := pool.GetBuf(min(2*used+1, dns.MaxMsgSize))
+			copy(*larger, (*payload)[:used])
+			pool.ReleaseBuf(payload)
+			payload = larger
+		}
+		n, err := body.Read((*payload)[used:])
+		used += n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			pool.ReleaseBuf(payload)
+			return nil, fmt.Errorf("failed to read http body: %w", err)
+		}
+	}
+	if used < dnsutils.DnsHeaderLen {
+		pool.ReleaseBuf(payload)
 		return nil, dnsutils.ErrPayloadTooSmall
 	}
-	payload := pool.GetBuf(bb.Len())
-	copy(*payload, bb.Bytes())
+	*payload = (*payload)[:used]
 	return payload, nil
 }

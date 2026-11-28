@@ -243,7 +243,6 @@ func (f *Forward) exchange(ctx context.Context, qCtx *query_context.Context, us 
 	if err != nil {
 		return nil, err
 	}
-	defer pool.ReleaseBuf(queryPayload)
 
 	concurrent := f.args.Concurrent
 	if concurrent <= 0 {
@@ -265,7 +264,12 @@ func (f *Forward) exchange(ctx context.Context, qCtx *query_context.Context, us 
 	r := rand.IntN(len(us))
 	for i := 0; i < concurrent; i++ {
 		u := us[(r+i)%len(us)]
-		qc := copyPayload(queryPayload)
+		// The final worker owns the original packed query. Other workers
+		// may outlive the caller, so they still get their own buffers.
+		qc := queryPayload
+		if i < concurrent-1 {
+			qc = copyPayload(queryPayload)
+		}
 		go func(uqid uint32, question dns.Question) {
 			defer pool.ReleaseBuf(qc)
 			// Give each upstream a fixed timeout to finish the query.

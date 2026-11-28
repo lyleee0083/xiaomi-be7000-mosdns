@@ -1,4 +1,5 @@
 import argparse
+import errno
 import ipaddress
 import json
 from pathlib import Path
@@ -9,25 +10,50 @@ import tempfile
 import time
 
 
-def dns_query(server, name, request_id, deadline):
+def dns_query(server, name, request_id, deadline, tcp=False):
     question = b"".join(bytes([len(label)]) + label.encode("ascii") for label in name.split("."))
     question += b"\0" + struct.pack("!HH", 1, 1)
     query = struct.pack("!6H", request_id, 0x0100, 1, 0, 0, 0) + question
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
-        client.connect(server)
-        client.settimeout(0.2)
-        while True:
-            try:
-                client.send(query)
-                reply = client.recv(2048)
-                break
-            except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
-                if time.monotonic() >= deadline:
-                    raise
+    while True:
+        try:
+            kind = socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM
+            with socket.socket(socket.AF_INET, kind) as client:
+                client.settimeout(0.2)
+                client.connect(server)
+                if tcp:
+                    client.sendall(struct.pack("!H", len(query)) + query)
+                    with client.makefile("rb") as stream:
+                        length, = struct.unpack("!H", stream.read(2))
+                        reply = stream.read(length)
+                        assert len(reply) == length
+                else:
+                    client.send(query)
+                    reply = client.recv(2048)
+            break
+        except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
+            if time.monotonic() >= deadline:
+                raise
     response_id, flags, questions, answers, _, _ = struct.unpack_from("!6H", reply)
-    assert response_id == request_id and flags & 0x8000 and questions == 1
-    assert reply[12:12 + len(question)] == question
+    details = (name, "tcp" if tcp else "udp", request_id, response_id, hex(flags), questions, reply.hex())
+    assert response_id == request_id and flags & 0x8000 and questions == 1, details
+    assert reply[12:12 + len(question)] == question, details
     return flags & 15, answers, reply
+
+
+def find_listener_port():
+    for _ in range(10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp:
+            tcp.bind(("127.0.0.1", 0))
+            address = tcp.getsockname()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
+                try:
+                    udp.bind(address)
+                except OSError as error:
+                    if error.errno != errno.EADDRINUSE:
+                        raise
+                    continue
+                return address[1]
+    raise RuntimeError("could not find a port for both TCP and UDP")
 
 
 def assert_rejected(command, directory, config, error_text):
@@ -56,12 +82,11 @@ def main():
                  str(examples / f"{name}.json")],
                 cwd=directory, timeout=15, check=True,
             )
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
+        port = find_listener_port()
 
         config = json.loads((examples / "config.json").read_text(encoding="utf-8"))
         config["plugins"][-1]["args"]["listen"] = f"127.0.0.1:{port}"
+        config["plugins"].append({"type": "tcp_server", "args": config["plugins"][-1]["args"]})
         config["plugins"][:0] = [
             {"tag": "ordinary_cache", "type": "cache", "args": {"size": 65535}},
             {"tag": "node_cache", "type": "cache", "args": {"size": 1}},
@@ -71,20 +96,21 @@ def main():
         with (directory / "server.log").open("wb+") as log:
             process = subprocess.Popen([*command, "start"], cwd=directory, stdout=log, stderr=log)
             try:
-                for request_id, (name, rcode) in enumerate([
-                    ("sub.blocked.example.test", 5),
-                    ("ip.example.test", 5),
-                    ("allowed.example.test", 0),
-                ], start=1):
-                    actual, count, reply = dns_query(
-                        ("127.0.0.1", port), name, request_id, time.monotonic() + 5,
-                    )
-                    assert actual == rcode, (name, actual)
-                    if rcode == 5:
-                        assert count == 0
-                    else:
-                        assert count == 1
-                        assert reply.endswith(b"\0\x04" + ipaddress.ip_address("198.51.100.10").packed)
+                for tcp in (False, True):
+                    for request_id, (name, rcode) in enumerate([
+                        ("sub.blocked.example.test", 5),
+                        ("ip.example.test", 5),
+                        ("allowed.example.test", 0),
+                    ], start=4 if tcp else 1):
+                        actual, count, reply = dns_query(
+                            ("127.0.0.1", port), name, request_id, time.monotonic() + 5, tcp=tcp,
+                        )
+                        assert actual == rcode, (name, tcp, actual)
+                        if rcode == 5:
+                            assert count == 0
+                        else:
+                            assert count == 1
+                            assert reply.endswith(b"\0\x04" + ipaddress.ip_address("198.51.100.10").packed)
             except (AssertionError, OSError):
                 log.seek(0)
                 print(log.read().decode("utf-8", errors="replace"))
